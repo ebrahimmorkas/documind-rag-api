@@ -24,6 +24,7 @@ app.MapOpenApi();
 app.MapScalarApiReference(options => options.WithTitle("DocuMind API"));
 
 app.MapDocumentEndpoints();
+app.MapSearchEndpoints();
 app.MapGet("/health", () => Results.Ok(new { status = "Healthy" })).ExcludeFromDescription();
 
 await app.RunAsync();
