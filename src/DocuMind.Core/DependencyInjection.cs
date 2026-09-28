@@ -1,4 +1,5 @@
 using DocuMind.Core.Ingestion;
+using DocuMind.Core.Retrieval;
 using DocuMind.Core.Storage;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
@@ -21,6 +22,7 @@ public static class DependencyInjection
         services.AddSingleton<ITextExtractor, PlainTextExtractor>();
         services.AddSingleton<ITextExtractor, PdfTextExtractor>();
         services.AddSingleton<IngestionService>();
+        services.AddSingleton<SearchService>();
 
         return services;
     }
