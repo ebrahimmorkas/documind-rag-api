@@ -1,0 +1,161 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>DocuMind</title>
+    <style>
+        :root {
+            --bg: #f8fafc; --panel: #ffffff; --text: #0f172a; --muted: #64748b;
+            --accent: #0f766e; --accent-soft: #ccfbf1; --border: #e2e8f0; --error: #b91c1c;
+        }
+        @media (prefers-color-scheme: dark) {
+            :root { --bg: #0b1120; --panel: #111827; --text: #e5e7eb; --muted: #94a3b8;
+                    --accent: #2dd4bf; --accent-soft: #134e4a; --border: #1f2937; --error: #f87171; }
+        }
+        * { box-sizing: border-box; }
+        body { margin: 0; font: 15px/1.55 system-ui, -apple-system, "Segoe UI", sans-serif; background: var(--bg); color: var(--text); }
+        main { max-width: 980px; margin: 0 auto; padding: 32px 16px 64px; display: grid; gap: 20px; }
+        header h1 { margin: 0; font-size: 1.6rem; }
+        header p { margin: 4px 0 0; color: var(--muted); }
+        section { background: var(--panel); border: 1px solid var(--border); border-radius: 12px; padding: 18px; }
+        h2 { margin: 0 0 12px; font-size: 1rem; }
+        .row { display: flex; gap: 8px; flex-wrap: wrap; }
+        input[type=text] { flex: 1; min-width: 220px; padding: 10px 12px; border: 1px solid var(--border); border-radius: 8px; background: transparent; color: inherit; font: inherit; }
+        button { padding: 10px 16px; border: 0; border-radius: 8px; background: var(--accent); color: white; font-weight: 600; cursor: pointer; }
+        button:disabled { opacity: .5; cursor: default; }
+        ul { list-style: none; padding: 0; margin: 12px 0 0; }
+        li { display: flex; justify-content: space-between; gap: 8px; padding: 8px 0; border-top: 1px solid var(--border); }
+        li small { color: var(--muted); }
+        .link { background: none; color: var(--error); padding: 0; font-weight: 500; }
+        #answer { white-space: pre-wrap; min-height: 1.5em; }
+        sup.cite { background: var(--accent-soft); color: var(--accent); border-radius: 4px; padding: 0 4px; margin-left: 2px; font-size: .75em; cursor: help; }
+        .source { border-left: 3px solid var(--accent); padding: 6px 10px; margin-top: 8px; font-size: .9em; }
+        .source b { color: var(--accent); }
+        .muted { color: var(--muted); }
+        .error { color: var(--error); }
+    </style>
+</head>
+<body>
+<main>
+    <header>
+        <h1>DocuMind</h1>
+        <p>Upload documents, then ask questions. Every answer cites the passages it came from.</p>
+    </header>
+
+    <section>
+        <h2>1 · Documents</h2>
+        <div class="row">
+            <input id="file" type="file" accept=".txt,.md,.markdown,.pdf" />
+            <button id="upload">Upload</button>
+        </div>
+        <p id="uploadStatus" class="muted"></p>
+        <ul id="documents"></ul>
+    </section>
+
+    <section>
+        <h2>2 · Ask</h2>
+        <form id="askForm" class="row">
+            <input id="question" type="text" placeholder="e.g. How many vacation days do employees get?" maxlength="1000" />
+            <button id="ask" type="submit">Ask</button>
+        </form>
+        <div id="answer" class="muted" style="margin-top:16px"></div>
+        <div id="sources"></div>
+    </section>
+</main>
+
+<script>
+    const $ = id => document.getElementById(id);
+
+    async function loadDocuments() {
+        const docs = await (await fetch("/api/documents")).json();
+        $("documents").replaceChildren(...docs.map(d => {
+            const li = document.createElement("li");
+            const label = document.createElement("span");
+            label.textContent = d.name;
+            const meta = document.createElement("small");
+            meta.textContent = ` ${d.chunkCount} chunks · ${(d.sizeBytes / 1024).toFixed(1)} KB`;
+            label.append(meta);
+            const remove = document.createElement("button");
+            remove.className = "link";
+            remove.textContent = "Delete";
+            remove.onclick = async () => { await fetch(`/api/documents/${d.id}`, { method: "DELETE" }); loadDocuments(); };
+            li.append(label, remove);
+            return li;
+        }));
+        if (docs.length === 0) $("documents").innerHTML = '<li class="muted">No documents yet.</li>';
+    }
+
+    $("upload").onclick = async () => {
+        const file = $("file").files[0];
+        if (!file) return;
+        const body = new FormData();
+        body.append("file", file);
+        $("uploadStatus").textContent = "Indexing…";
+        const response = await fetch("/api/documents", { method: "POST", body });
+        const result = await response.json();
+        $("uploadStatus").textContent = response.ok ? `Indexed ${result.name} (${result.chunkCount} chunks).` : result.detail;
+        $("uploadStatus").className = response.ok ? "muted" : "error";
+        loadDocuments();
+    };
+
+    $("askForm").onsubmit = async event => {
+        event.preventDefault();
+        const question = $("question").value.trim();
+        if (!question) return;
+
+        $("ask").disabled = true;
+        $("answer").className = "";
+        $("answer").textContent = "";
+        $("sources").replaceChildren();
+        let sources = [];
+
+        const response = await fetch("/api/ask/stream", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ question })
+        });
+
+        // Parse the Server-Sent Events stream incrementally.
+        const reader = response.body.pipeThrough(new TextDecoderStream()).getReader();
+        let buffer = "";
+        while (true) {
+            const { value, done } = await reader.read();
+            if (done) break;
+            buffer += value;
+            const frames = buffer.split("\n\n");
+            buffer = frames.pop();
+            for (const frame of frames) {
+                const type = /^event: (.*)$/m.exec(frame)?.[1];
+                const data = JSON.parse(/^data: (.*)$/m.exec(frame)?.[1] ?? "{}");
+                if (type === "sources") sources = data.sources ?? [];
+                if (type === "text") $("answer").append(data.text);
+                if (type === "citation") {
+                    const sup = document.createElement("sup");
+                    sup.className = "cite";
+                    sup.textContent = data.citation.sourceNumber;
+                    sup.title = data.citation.citedText;
+                    $("answer").append(sup);
+                }
+                if (type === "error") { $("answer").className = "error"; $("answer").textContent = data.text; }
+            }
+        }
+
+        $("sources").replaceChildren(...sources.map(s => {
+            const div = document.createElement("div");
+            div.className = "source";
+            const title = document.createElement("b");
+            title.textContent = `[${s.number}] ${s.documentName}${s.pageNumber ? `, page ${s.pageNumber}` : ""}`;
+            const snippet = document.createElement("div");
+            snippet.className = "muted";
+            snippet.textContent = s.snippet.replaceAll("**", "");
+            div.append(title, snippet);
+            return div;
+        }));
+        $("ask").disabled = false;
+    };
+
+    loadDocuments();
+</script>
+</body>
+</html>
