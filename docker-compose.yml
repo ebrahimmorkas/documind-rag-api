@@ -1,0 +1,16 @@
+services:
+  documind:
+    build:
+      context: .
+      dockerfile: src/DocuMind.Api/Dockerfile
+    image: documind:local
+    container_name: documind
+    ports:
+      - "8080:8080"
+    environment:
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+    volumes:
+      - documind-data:/home/app/data
+
+volumes:
+  documind-data:
