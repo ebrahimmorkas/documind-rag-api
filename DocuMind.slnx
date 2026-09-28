@@ -3,4 +3,7 @@
     <Project Path="src/DocuMind.Api/DocuMind.Api.csproj" />
     <Project Path="src/DocuMind.Core/DocuMind.Core.csproj" />
   </Folder>
+  <Folder Name="/tests/">
+    <Project Path="tests/DocuMind.Tests/DocuMind.Tests.csproj" />
+  </Folder>
 </Solution>
